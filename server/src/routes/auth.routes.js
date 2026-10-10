@@ -1,15 +1,28 @@
 import express from "express";
 import bcrypt from "bcrypt";
 import pool from "../config/db.js";
-import { Client } from "pg";
 import jwt from "jsonwebtoken"
+import authMiddleware from "../middleware/auth.js";
+import rateLimiter from "express-rate-limit"
 
 const router = express.Router();
 
+const authLimiter = rateLimiter({
+    windowMs: 15*60*1000,
+    limit:  10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: {error:"Too many request from the device"}
 
-router.post("/register", async (req, res) => {
+})
 
-    
+
+router.post("/register",authLimiter, async (req, res) => {
+
+    if (!process.env.MY_JWT_SECRETE) {
+        return res.status(500).json({ error: "can't register user" })
+    }
+
 
     const { name, phone, password } = req.body;
 
@@ -41,12 +54,13 @@ router.post("/register", async (req, res) => {
         return res.status(400).json({ error: "password must be atleast 8 characters" })
     }
 
-    const client = await pool.connect()
+    let client
     try {
-        
 
-        await client.query('BEGIN')
+        client = await pool.connect()
+
         const hashed_password = await bcrypt.hash(password, 10);
+        await client.query('BEGIN')
 
         const result = await client.query(
             "INSERT INTO users (name, phone, pass_hashed) VALUES ($1, $2, $3) RETURNING id, name, phone",
@@ -59,20 +73,21 @@ router.post("/register", async (req, res) => {
         await client.query('COMMIT')
 
         const token = jwt.sign(
-            { id: newUser.id, phone: newUser.phone },
+            { id: newUser.id },
             process.env.MY_JWT_SECRETE,
-            { expiresIn: "1h" }
+            { expiresIn: "7d" }
         )
 
         return res.status(201).json({
             success: true,
             message: "User registered",
+            token,
             data: result.rows[0]
         });
 
     } catch (err) {
 
-        await client.query("ROLLBACK")
+        await client?.query("ROLLBACK").catch(() => { })
 
         console.error(err);
 
@@ -90,7 +105,67 @@ router.post("/register", async (req, res) => {
     }
 });
 
+router.post('/login',authLimiter, async (req, res) => {
+    const { phone, password } = req.body;
 
+    if (!phone || !password) {
+        return res.status(400).json({
+            error: "Give the complete user info"
+        });
+    }
+    if (typeof phone !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: "valid password and phone number is required" })
+    }
+
+    const cleanPhone = phone.trim()
+
+    if (!/^\d{10}$/.test(cleanPhone)) {
+        return res.status(400).json({ error: "phone number must contain 10 digits" })
+    }
+
+
+    try {
+        const result = await pool.query("SELECT id, name, phone, pass_hashed FROM users WHERE phone = $1", [cleanPhone])
+
+        const user = result.rows[0]
+
+
+
+        if (!user) {
+            return res.status(401).json({
+                error: "Invalid phone number or password"
+            });
+        }
+        const compare = await bcrypt.compare(password, user.pass_hashed)
+        if (!compare) {
+            return res.status(401).json({ error: "Invalid credentials" })
+        }
+        const token = jwt.sign(
+            { id: user.id },
+            process.env.MY_JWT_SECRETE,
+            { expiresIn: "7d" }
+        )
+        return res.status(200).json({
+            success: true,
+            message: "Login successful",
+            token,
+            data: {
+                id: user.id,
+                name: user.name,
+                phone: user.phone
+            }
+        })
+
+    } catch (err) {
+        console.error("Login error:", err);
+
+        return res.status(500).json({
+            error: "Something went wrong"
+        });
+    }
+
+
+})
 
 
 
