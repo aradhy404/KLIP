@@ -1,5 +1,7 @@
 {
   "dependencies": {
-    "nodemon": "^3.1.14"
+    "fs": "^0.0.1-security",
+    "nodemon": "^3.1.14",
+    "pg": "^8.23.1"
   }
 }

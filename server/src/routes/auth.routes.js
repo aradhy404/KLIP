@@ -4,23 +4,25 @@ import pool from "../config/db.js";
 import jwt from "jsonwebtoken"
 import authMiddleware from "../middleware/auth.js";
 import rateLimiter from "express-rate-limit"
+import normalizephone from "../utils/phone.js";
+
 
 const router = express.Router();
 
 const authLimiter = rateLimiter({
-    windowMs: 15*60*1000,
-    limit:  10,
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
     standardHeaders: "draft-8",
     legacyHeaders: false,
-    message: {error:"Too many request from the device"}
+    message: { error: "Too many request from the device" }
 
 })
 
 
-router.post("/register",authLimiter, async (req, res) => {
+router.post("/register", authLimiter, async (req, res) => {
 
-    if (!process.env.MY_JWT_SECRETE) {
-        return res.status(500).json({ error: "can't register user" })
+    if (!process.env.MY_JWT_SECRET) {
+        return res.status(500).json({ error: "Server configuration error" })
     }
 
 
@@ -37,18 +39,22 @@ router.post("/register",authLimiter, async (req, res) => {
 
 
     const cleanName = name.trim()
-    const cleanPhone = phone.trim()
+
 
     if (!cleanName || cleanName.length > 100) {
         return res.status(400).json({
             error: "Name must contain 1-100 character"
         });
     }
+    const normalizedPhone = normalizephone(phone);
 
-
-    if (!/^\d{10}$/.test(cleanPhone)) {
-        return res.status(400).json({ error: "phone number must contain 10 digits" })
+    if (!normalizedPhone) {
+        return res.status(400).json({
+            error: "Invalid phone number"
+        });
     }
+
+
 
     if (password.length < 8 || Buffer.byteLength(password, "utf-8") > 72) {
         return res.status(400).json({ error: "password must be atleast 8 characters" })
@@ -64,7 +70,7 @@ router.post("/register",authLimiter, async (req, res) => {
 
         const result = await client.query(
             "INSERT INTO users (name, phone, pass_hashed) VALUES ($1, $2, $3) RETURNING id, name, phone",
-            [cleanName, cleanPhone, hashed_password]
+            [cleanName, normalizedPhone, hashed_password]
         );
         const newUser = result.rows[0]
 
@@ -74,7 +80,7 @@ router.post("/register",authLimiter, async (req, res) => {
 
         const token = jwt.sign(
             { id: newUser.id },
-            process.env.MY_JWT_SECRETE,
+            process.env.MY_JWT_SECRET,
             { expiresIn: "7d" }
         )
 
@@ -105,7 +111,7 @@ router.post("/register",authLimiter, async (req, res) => {
     }
 });
 
-router.post('/login',authLimiter, async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
     const { phone, password } = req.body;
 
     if (!phone || !password) {
@@ -117,15 +123,18 @@ router.post('/login',authLimiter, async (req, res) => {
         return res.status(400).json({ error: "valid password and phone number is required" })
     }
 
-    const cleanPhone = phone.trim()
 
-    if (!/^\d{10}$/.test(cleanPhone)) {
-        return res.status(400).json({ error: "phone number must contain 10 digits" })
+    const normalizedPhone = normalizephone(phone);
+
+    if (!normalizedPhone) {
+        return res.status(400).json({
+            error: "Invalid phone number"
+        });
     }
 
 
     try {
-        const result = await pool.query("SELECT id, name, phone, pass_hashed FROM users WHERE phone = $1", [cleanPhone])
+        const result = await pool.query("SELECT id, name, phone, pass_hashed FROM users WHERE phone = $1", [normalizedPhone])
 
         const user = result.rows[0]
 
@@ -138,11 +147,11 @@ router.post('/login',authLimiter, async (req, res) => {
         }
         const compare = await bcrypt.compare(password, user.pass_hashed)
         if (!compare) {
-            return res.status(401).json({ error: "Invalid credentials" })
+            return res.status(401).json({ error: "Invalid phone number or password" })
         }
         const token = jwt.sign(
             { id: user.id },
-            process.env.MY_JWT_SECRETE,
+            process.env.MY_JWT_SECRET,
             { expiresIn: "7d" }
         )
         return res.status(200).json({
