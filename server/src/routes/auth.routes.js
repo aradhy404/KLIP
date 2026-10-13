@@ -2,7 +2,7 @@ import express from "express";
 import bcrypt from "bcrypt";
 import pool from "../config/db.js";
 import jwt from "jsonwebtoken"
-import authMiddleware from "../middleware/auth.js";
+import reqAuthMiddleware from "../middleware/reqAuth.js";
 import rateLimiter from "express-rate-limit"
 import normalizephone from "../utils/phone.js";
 
@@ -175,6 +175,8 @@ router.post('/login', authLimiter, async (req, res) => {
 
 
 })
+
+
 
 
 
