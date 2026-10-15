@@ -1,6 +1,9 @@
-import createEntryService from "../services/entry.serivce.js"
+import{createEntryService,listEntriesForUser} from "../services/entry.serivce.js"
 import normalizePhone from "../utils/phone.js"
 import normalizeAmount from "../utils/amount.js";
+
+
+
 
 
 
@@ -40,7 +43,7 @@ const createEntry = async (req, res) => {
             normalizedPhone,
             type,
             amountPaise,
-            description: cleanDescription
+            cleanDescription
         })
         res.status(201).json(entry)
     } catch (err) {
@@ -50,4 +53,19 @@ const createEntry = async (req, res) => {
 
 }
 
-export default createEntry
+const listEntries = async (req,res)=>{
+    const limit = req.query.limit === undefined?20:Number(req.query.limit)
+    const offset = req.query.offset === undefined?0:Number(req.query.offset)
+    if(!Number.isInteger(limit)||Number.isInteger(offset)||limit<1||limit>100||offset<0){
+        return res.status(400).json({error:"invalid response"})
+    }
+    try{
+        const getEntry = await listEntriesForUser(req.user.id,limit, offset)
+        res.json(getEntry)
+    }catch(err){
+        console.error(err)
+        res.status(500).json({error:"failed to retrive user"})
+    }
+}
+
+export { createEntry, listEntries }

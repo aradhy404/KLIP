@@ -1,4 +1,3 @@
-
 import pool from "../config/db.js";
 
 const createEntryService = async ({
@@ -75,4 +74,28 @@ const createEntryService = async ({
     }
 };
 
-export default createEntryService;
+
+const listEntriesForUser = async(UserId, limit, offset)=>{
+    const sql = `SELECT
+  e.id, e.type, e.amount_paise, e.status, e.description, e.created_at,
+  CASE WHEN e.creator_id = $1 THEN 'lender' ELSE 'borrower' END AS role,
+  CASE WHEN e.creator_id = $1
+       THEN COALESCE(cp.name, e.counterparty_phone)
+       ELSE cr.name END AS other_party
+FROM entries e
+JOIN users cr      ON cr.id = e.creator_id
+LEFT JOIN users cp ON cp.id = e.counterparty_id
+WHERE e.creator_id = $1 OR e.counterparty_id = $1
+ORDER BY e.created_at DESC
+LIMIT $2 OFFSET $3`
+
+const result =await pool.query(sql,[UserId,limit,offset])
+return result.rows
+}
+
+
+
+export  {createEntryService, listEntriesForUser};
+
+
+
