@@ -56,7 +56,7 @@ const createEntry = async (req, res) => {
 const listEntries = async (req,res)=>{
     const limit = req.query.limit === undefined?20:Number(req.query.limit)
     const offset = req.query.offset === undefined?0:Number(req.query.offset)
-    if(!Number.isInteger(limit)||Number.isInteger(offset)||limit<1||limit>100||offset<0){
+    if(!Number.isInteger(limit)||!Number.isInteger(offset)||limit<1||limit>100||offset<0){
         return res.status(400).json({error:"invalid response"})
     }
     try{
