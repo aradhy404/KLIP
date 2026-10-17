@@ -1,482 +1,279 @@
-# Klip — Backend Design & Engineering Specification
+# Klip — Backend Design and Engineering Specification
 
-**Version:** 0.1  
-**Status:** Initial Architecture Draft
+**Version:** 0.2
+**Status:** Auth and entry creation/listing implemented. Lifecycle endpoints in progress.
 
-## 1. Backend Objectives
-The backend is responsible for authentication, authorization, user management, people/contact management, obligation management, balance calculation, settlement handling, validation, database access, error handling, and API security.
+## 1. Objectives
 
-## 2. Technology Stack
+Authentication, authorization, entry management, counterparty linking, balance calculation, validation, error handling and API security.
+
+## 2. Technology Stack (as built)
 
 | Area | Technology |
 |---|---|
-| Runtime | Node.js |
-| Framework | Express |
-| Language | JavaScript |
-| Database | PostgreSQL |
-| Authentication | JWT |
-| Password hashing | bcrypt |
-| Validation | Zod |
-| API testing | Postman |
-| Version control | Git + GitHub |
-| Production backend | Render |
-| Production database | Neon |
+| Runtime | Node.js (ES modules) |
+| Framework | Express 5 |
+| Database | PostgreSQL (Neon), accessed with `pg` and raw SQL |
+| Auth | JWT (`jsonwebtoken`), passwords hashed with `bcrypt` |
+| Security middleware | `cors`, `express-rate-limit` |
+| Config | `dotenv` |
+| Validation | Hand-written checks today; Zod planned |
+| Migrations | Custom runner `src/utils/migrate.js` |
+| Hosting | API on Render, DB on Neon, client on Vercel |
 
-The frontend will use React/Vite and communicate through REST APIs.
+No ORM is used. SQL is written by hand so constraints, transactions and joins stay explicit.
 
 ## 3. Architecture
 
 ```text
-Client
-  |
-  v
-Routes
-  |
-  v
-Controllers
-  |
-  v
-Services
-  |
-  v
-Database / Repository Layer
-  |
-  v
-PostgreSQL
+Client (React/Vite on Vercel)
+        │  HTTPS REST
+        ▼
+Routes → Middleware → Controllers → Services → pg Pool → PostgreSQL (Neon)
 ```
 
-Cross-cutting middleware:
-- Authentication
-- Authorization
-- Validation
-- Error handling
-- Logging
+- **Routes:** map URLs to controllers and attach middleware.
+- **Middleware:** `reqAuth` (JWT verification), rate limiter, CORS.
+- **Controllers:** validate and normalize input, shape responses, translate errors to status codes.
+- **Services:** business rules and transactions.
+- **Utils:** `phone.js`, `amount.js`, `migrate.js`.
 
-## 4. Proposed Repository Structure
+## 4. Repository Layout
 
 ```text
-klip/
-├── client/
-├── server/
-│   ├── src/
-│   │   ├── config/
-│   │   ├── controllers/
-│   │   ├── middleware/
-│   │   ├── routes/
-│   │   ├── services/
-│   │   ├── db/
-│   │   │   ├── pool.js
-│   │   │   ├── migrations/
-│   │   │   └── queries/
-│   │   ├── schemas/
-│   │   ├── utils/
-│   │   ├── app.js
-│   │   └── server.js
-│   ├── .env
-│   ├── .env.example
-│   ├── package.json
-│   └── README.md
+KLIP-SERVER/
 ├── docs/
 │   ├── PRD.md
 │   └── BACKEND.md
-├── .gitignore
-└── README.md
+├── server/
+│   ├── src/
+│   │   ├── app.js
+│   │   ├── config/db.js
+│   │   ├── controllers/entry.controller.js
+│   │   ├── middleware/reqAuth.js
+│   │   ├── routes/{auth,entry}.routes.js
+│   │   ├── services/entry.serivce.js
+│   │   ├── utils/{phone,amount,migrate}.js
+│   │   └── migrations/{001_int.sql, 002_contacts.sql, ...}
+│   ├── .env.example
+│   ├── package.json
+│   └── README.md
+└── .gitignore
 ```
 
-The structure can change as implementation progresses, but changes should be reflected here.
+Migration files live in `server/src/migrations/` because `migrate.js` resolves `../migrations` relative to `src/utils/`.
 
-## 5. Initial Database Model
+## 5. Data Model
 
-The initial domain consists of:
+### users
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | `gen_random_uuid()` |
+| name | TEXT NOT NULL | 1 to 100 characters |
+| phone | TEXT UNIQUE NOT NULL | normalized 10-digit Indian number, no `+91` |
+| pass_hashed | TEXT NOT NULL | bcrypt hash |
+| created_at | TIMESTAMPTZ | default `now()` |
 
-```text
-users
-people
-obligations
-```
+### entries
+| Column | Type | Notes |
+|---|---|---|
+| id | UUID PK | |
+| creator_id | UUID FK users | the lender |
+| counterparty_id | UUID FK users, nullable | set when the counterparty is registered |
+| counterparty_phone | TEXT | always stored, used for auto-linking |
+| type | ENUM `money`, `favour` | |
+| amount_paise | BIGINT, CHECK > 0 | required for money |
+| description | TEXT | max 500 characters |
+| status | ENUM `pending`, `confirmed`, `dispute`, `settled` | default `pending` |
+| created_at | TIMESTAMPTZ | |
 
-### Users
+Constraints: `no_self_entry` (creator cannot equal counterparty), `money_requires_amount`.
+Indexes: creator, counterparty, counterparty_phone.
 
-```text
-users
-----------------
-id
-name
-email
-password_hash
-created_at
-updated_at
-```
+### entry_events (append-only)
+`id BIGSERIAL, entry_id, actor_id, action, created_at`. A trigger blocks `UPDATE` and `DELETE`, so history cannot be rewritten.
 
-Constraints:
-- `id` primary key
-- `email` unique and required
-- `password_hash` required
-- passwords are never stored in plaintext
+### entry_photos
+Exists, unused until post-MVP.
 
-### People
+### contacts (migration 002)
+| Column | Type | Notes |
+|---|---|---|
+| owner_id | UUID FK users | the lender |
+| phone | TEXT | counterparty phone |
+| name | TEXT NOT NULL | private label |
+| created_at | TIMESTAMPTZ | |
 
-```text
-people
-----------------
-id
-user_id
-name
-email
-created_at
-updated_at
-```
+Primary key `(owner_id, phone)`. One label per counterparty per owner.
 
-A person belongs to a user's private contact list. The model for connecting two registered Klip users will be finalized before implementation.
+### Planned additions
+- `entries.settled_at TIMESTAMPTZ` and `entries.updated_at TIMESTAMPTZ`.
+- A `cancelled` status. Entries are **not hard-deleted**, because `entry_events` references `entries(id)` and its trigger blocks deletes. Cancel instead.
 
-### Obligations
+## 6. Identity and Linking
 
-```text
-obligations
-----------------
-id
-person_id
-created_by
-amount
-type
-description
-status
-created_at
-settled_at
-updated_at
-```
-
-Initial type values:
-- `OWED_TO_ME`
-- `I_OWE`
-
-Initial status values:
-- `PENDING`
-- `SETTLED`
-
-This schema is intentionally provisional until the relationship model is finalized.
-
-## 6. Database Rules
-- Use foreign keys for relationships.
-- Explicitly define deletion behaviour.
-- Index fields frequently used for lookup and filtering.
-- Use transactions for operations that must succeed or fail together.
-- Never trust client-supplied ownership identifiers.
+- Phone numbers are normalized by `utils/phone.js`: trim, strip spaces and dashes, strip `+91` or a leading `0`, require exactly 10 digits.
+- When creating an entry, the service looks up a user with that phone. If found, `counterparty_id` is set immediately.
+- When a user registers, inside the same transaction, all entries with `counterparty_phone = new phone AND counterparty_id IS NULL` are linked to the new user.
 
 ## 7. Authentication
 
-Authentication will use bcrypt + JWT.
+**Register** `POST /api/auth/register`: validate → insert user and link waiting entries in one transaction → return JWT and safe user.
+**Login** `POST /api/auth/login`: normalize phone → compare bcrypt hash → return JWT.
 
-### Registration
+- JWT payload: `{ id }`, signed with `MY_JWT_SECRET`, expires in 7 days, sent as `Authorization: Bearer <token>`.
+- Logout is client-side (delete the token). JWTs are stateless; there is no server-side revocation yet.
+- Password rule: 8 characters minimum, 72 bytes maximum (bcrypt limit).
+- Auth routes are limited to 10 requests per 15 minutes per IP. `trust proxy` is set to 1 because Render sits behind a proxy.
+- The same error message is returned for unknown phone and wrong password.
+
+## 8. Authorization Rules
+
+| Action | Who may do it | Allowed from status |
+|---|---|---|
+| Read an entry | creator or counterparty | any |
+| Confirm / dispute | counterparty only | `pending` |
+| Edit / cancel | creator only | `pending`, `dispute` |
+| Settle | creator only | `pending`, `confirmed` |
+
+Ownership always comes from `req.user.id` in the verified JWT, never from request bodies. A user who is not part of an entry receives **404**, not 403, so existence is not leaked.
+
+Every status change inserts an `entry_events` row inside the same transaction as the update.
+
+## 9. API Contract
+
+### Implemented
+
 ```text
-POST /api/auth/register
-        |
-Validate input
-        |
-Check email
-        |
-Hash password
-        |
-Create user
-        |
-Return safe user response
+POST /api/auth/register   { name, phone, password }
+POST /api/auth/login      { phone, password }
+POST /api/entry           { type, amount, description, counterpartyPhone }
+GET  /api/entry?limit=20&offset=0
 ```
 
-### Login
+- `amount` is a string of whole rupees (e.g. `"500"`), converted to paise. Decimals are not accepted yet.
+- `GET /api/entry` returns `id, type, amount_paise, status, description, created_at, role, other_party`. `role` is `lender` or `borrower` from the caller's point of view. `other_party` is the contact name or the phone for the lender, and the lender's registered name for the borrower.
+
+### Planned
+
 ```text
-POST /api/auth/login
-        |
-Validate credentials
-        |
-Compare password
-        |
-Generate JWT
-        |
-Return authentication result
+GET   /api/auth/me
+POST  /api/entry                (adds counterpartyName, upserts contact)
+GET   /api/entry/:id
+PATCH /api/entry/:id            creator, pending/dispute
+POST  /api/entry/:id/confirm    counterparty
+POST  /api/entry/:id/dispute    counterparty
+POST  /api/entry/:id/settle     creator
+POST  /api/entry/:id/cancel     creator
+GET   /api/entry/:id/events
+GET   /api/dashboard            totals
+GET   /api/people               entries grouped by counterparty with balances
 ```
 
-Password hashes must never be returned.
+The earlier `/api/people` CRUD and `/api/obligations` routes are removed. People are derived from entries and contacts.
 
-## 8. Authorization
-Authentication answers **who are you?** Authorization answers **are you allowed to do this?**
+## 10. Dashboard Semantics
 
-Every protected resource must verify ownership or permission on the server.
+Computed in SQL, never trusted from the client:
 
-Example:
-`GET /api/obligations/123` must verify that obligation `123` belongs to the authenticated user.
+- **owedToYou:** `SUM(amount_paise)` where `creator_id = me` and status in (`pending`, `confirmed`) and type `money`.
+- **youOwe:** `SUM(amount_paise)` where `counterparty_id = me` and status = `confirmed` and type `money`.
+- **net:** `owedToYou - youOwe`.
+- **openFavours:** count of non-settled favours per side.
+- **pendingReview:** entries addressed to me with status `pending`.
 
-## 9. Validation
-All external input must be validated before business logic. Zod is the planned validation library.
+All values are integer paise; the client formats to rupees.
 
-Inputs include:
-- Registration fields
-- Login fields
-- Person fields
-- Obligation fields
+## 11. Validation and Errors
 
-## 10. Error Handling
-Use centralized error handling with consistent JSON responses.
+- All external input is validated before business logic. Zod is planned to replace the manual checks.
+- Current error shape: `{ "error": "message" }`. Target shape: `{ "error": { "code": "VALIDATION_ERROR", "message": "..." } }`.
+- Status codes: 400 invalid input, 401 unauthenticated, 404 not found or not yours, 409 conflict (phone already registered), 429 rate limited, 500 unexpected. Internal database errors are never returned to the client.
 
-Example:
-
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Invalid request data"
-  }
-}
-```
-
-Common statuses:
-- 400 Bad Request
-- 401 Unauthorized
-- 403 Forbidden
-- 404 Not Found
-- 409 Conflict
-- 422 Unprocessable Entity
-- 500 Internal Server Error
-
-## 11. Initial API Contract
-
-### Authentication
-```text
-POST /api/auth/register
-POST /api/auth/login
-POST /api/auth/logout
-GET  /api/auth/me
-```
-
-### People
-```text
-GET    /api/people
-POST   /api/people
-GET    /api/people/:id
-PATCH  /api/people/:id
-DELETE /api/people/:id
-```
-
-### Obligations
-```text
-GET    /api/obligations
-POST   /api/obligations
-GET    /api/obligations/:id
-PATCH  /api/obligations/:id
-DELETE /api/obligations/:id
-POST   /api/obligations/:id/settle
-```
-
-### Dashboard
-```text
-GET /api/dashboard
-```
-
-This is an initial contract and may change after domain/database design.
-
-## 12. REST Conventions
-- Use nouns for resources.
-- Use HTTP methods semantically.
-- Return meaningful status codes.
-- Validate request bodies.
-- Avoid exposing database implementation details.
-- Return predictable JSON structures.
-
-## 13. Security Requirements
-- Hash passwords with bcrypt.
-- Keep secrets in environment variables.
-- Never commit `.env`.
-- Validate input.
-- Enforce authorization.
-- Avoid exposing sensitive database errors.
-- Configure CORS appropriately.
-- Use secure token handling.
-- Consider rate limiting for authentication.
-- Derive ownership from authentication rather than trusting client IDs.
-
-## 14. Environment Variables
+## 12. Environment Variables
 
 ```env
-PORT=3000
+PORT=8000
 DATABASE_URL=
-JWT_SECRET=
-NODE_ENV=development
-CLIENT_URL=
+MY_JWT_SECRET=
+CLIENT_URL=https://klip-client.vercel.app
 ```
 
-`.env` must not be committed. `.env.example` documents required variables without real secrets.
+- `.env` is never committed. `.env.example` documents the keys without values.
+- CORS uses an allowlist built from `CLIENT_URL` (trimmed, trailing slash removed), the production client and `http://localhost:5173`.
 
-## 15. Development Workflow
+## 13. Deployment
 
 ```text
-Requirement
-    ↓
-Design
-    ↓
-Implementation
-    ↓
-Validation
-    ↓
-Testing
-    ↓
-Commit
-    ↓
-Pull request / merge
+Browser → Vercel (client) → Render (API) → Neon (PostgreSQL)
 ```
 
-Example branches:
-```text
-main
-feature/auth
-feature/people
-feature/obligations
-feature/dashboard
-```
+- Render auto-deploys from `main`.
+- Migrations are run manually with `npm run migrate`. Use a **separate Neon branch for development** so local migrations do not touch production data.
+- On the free tier the API sleeps after inactivity and the first request can take about 50 seconds.
 
-Example commits:
-```text
-feat: add user registration
-feat: implement login authentication
-feat: add people endpoints
-feat: add obligation creation
-fix: enforce obligation ownership
-```
+## 14. Security Checklist
 
-## 16. Testing Strategy
+| Item | Status |
+|---|---|
+| bcrypt password hashing | Done |
+| JWT secret in env | Done |
+| Auth rate limiting | Done |
+| CORS allowlist | Done |
+| Secrets rotated after leak in git history | Done (JWT secret, DB password) |
+| Ownership checks on every entry route | In progress |
+| Zod validation | To do |
+| Phone verification (OTP) | To do (v1.1) |
+| Helmet security headers | To do |
+| Authorization tests | To do |
 
-### Manual
-Use Postman during early development.
+## 15. Testing Strategy
 
-### Unit
-Test business logic independently where useful.
+- **Manual:** Postman collection for every endpoint.
+- **Integration:** register → login → create entry → counterparty registers → confirm → settle → totals.
+- **Authorization:** user C cannot read, confirm or settle an entry between A and B; the counterparty cannot settle; the creator cannot confirm their own entry.
+- Split `app.js` into `app.js` (builds the app) and `server.js` (listens) so tests can import the app without opening a port.
 
-### Integration
-Test API + database + authentication flows.
+## 16. Milestones
 
-Critical flows:
-```text
-Register → Login → Create person → Create obligation
-```
+| # | Milestone | Status |
+|---|---|---|
+| 1 | Project setup, Express, env config | Done |
+| 2 | Database schema and migrations | Done |
+| 3 | Auth: register, login, JWT, rate limit | Done |
+| 4 | Entries: create and list | Done |
+| 5 | Contacts and `counterpartyName` | Next |
+| 6 | Confirm / dispute | To do |
+| 7 | Settle, edit, cancel, events | To do |
+| 8 | Dashboard and people endpoints | To do |
+| 9 | Hardening: Zod, Helmet, tests | To do |
+| 10 | Docs, screenshots, resume-ready README | To do |
+| 11 | OTP verification (v1.1) | Later |
 
-```text
-Create obligation → Settle → Verify balance
-```
+## 17. Architecture Decision Log
 
-Authorization tests must verify that one user cannot access another user's records.
+- **ADR-001 PostgreSQL.** Relational data with constraints, transactions and aggregation.
+- **ADR-002 REST API.** Frontend and backend deploy independently.
+- **ADR-003 Layered backend.** Routes, controllers, services and DB access are separate.
+- **ADR-004 Lender-first entries.** The creator is always the lender; there is no "I owe" entry. Fewer states, clearer product.
+- **ADR-005 Phone as identity.** Login and counterparty matching use a normalized phone number. Registration auto-links earlier entries.
+- **ADR-006 Money as integer paise.** No floating point; INR only.
+- **ADR-007 Append-only events.** A trigger prevents edits to history; entries are cancelled, never deleted.
+- **ADR-008 Raw SQL with `pg`.** No ORM; SQL stays visible and reviewable.
+- **ADR-009 Contacts are per-owner labels.** Names are private and are not looked up across users.
 
-## 17. Deployment
+## 18. Known Technical Debt
 
-### Backend
-Render.
+- File is named `entry.serivce.js` (typo); rename to `entry.service.js` and fix the import.
+- `SELF_ENTRY_NOT_ALLOWED` is thrown by the service but the controller returns 500; map it to 400.
+- `app.js` calls `listen` on import, which blocks testing.
+- Root-level `package.json` contains an unused `fs` package (a placeholder, `fs` is built into Node) and duplicates server dependencies; remove it.
+- Amounts accept whole rupees only.
+- No server-side token revocation.
 
-### Database
-Neon PostgreSQL.
+## 19. Open Architecture Questions
 
-### Frontend
-Vercel.
-
-Production architecture:
-
-```text
-Browser
-   |
-   v
-Vercel
-   |
-   | HTTPS REST API
-   v
-Render
-   |
-   v
-Neon PostgreSQL
-```
-
-## 18. Development Milestones
-
-### Milestone 1 — Project setup
-- Initialize repository
-- Configure Node/Express
-- Environment configuration
-- ESLint
-- Folder structure
-
-### Milestone 2 — Database
-- Finalize ER model
-- Create migrations
-- Add constraints
-- Add indexes
-- Configure PostgreSQL
-
-### Milestone 3 — Authentication
-- Registration
-- Password hashing
-- Login
-- JWT
-- Authentication middleware
-- Authorization
-
-### Milestone 4 — People
-- Create
-- List
-- Get
-- Update
-- Delete
-
-### Milestone 5 — Obligations
-- Create
-- Read
-- Update
-- Delete
-- Settle
-- Balance calculation
-
-### Milestone 6 — Dashboard
-- Overall balance
-- Pending obligations
-- Recent activity
-- Person summaries
-
-### Milestone 7 — Hardening
-- Validation
-- Error handling
-- Rate limiting
-- Security review
-- Tests
-
-### Milestone 8 — Production
-- Production environment
-- Deployment
-- Database migration
-- API testing
-- Logging/monitoring
-
-## 19. Architecture Decision Log
-
-### ADR-001 — PostgreSQL
-**Decision:** PostgreSQL is the primary database.
-
-**Reason:** Klip has relational entities and needs constraints, transactions, joins, and aggregation.
-
-### ADR-002 — REST API
-**Decision:** The backend exposes a REST API.
-
-**Reason:** The frontend and backend should remain independently deployable and communicate through a clear contract.
-
-### ADR-003 — Layered backend
-**Decision:** Separate routes, controllers, services, database access, and middleware.
-
-**Reason:** Separation of concerns improves maintainability and testing.
-
-## 20. Open Architecture Questions
-
-These must be resolved before the database migration is finalized:
-
-1. Does a person need a Klip account?
-2. Can two Klip users connect directly?
-3. What happens when an existing contact joins Klip?
-4. Should obligations be visible to both participants?
-5. How should non-monetary favours affect numerical balance?
-6. Can an obligation be partially settled?
-7. Can an obligation be edited after partial settlement?
-8. Should deleting a person delete historical obligations?
-9. What exactly constitutes net balance?
-10. Should MVP support only one currency?
+1. Partial settlement and how it affects `amount_paise`.
+2. Whether the counterparty can propose "I have paid".
+3. Expiry or reminders for entries whose counterparty never registers.
+4. Whether `confirmed` entries may ever be amended.

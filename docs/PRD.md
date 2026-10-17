@@ -1,167 +1,180 @@
 # Klip — Product Requirements Document
 
-**Version:** 0.1  
-**Status:** Draft  
-**Product:** Klip  
+**Version:** 0.2
+**Status:** MVP in progress (auth, entry creation and listing are live)
 **Tagline:** Keep track. Keep it fair.
 
 ## 1. Product Overview
-Klip is a private personal ledger for tracking informal obligations between people. These obligations can include money, favours, or other commitments.
 
-Klip answers one simple question:
+Klip is a private ledger for the favours and money **you have given** to people around you.
 
-> **Who owes whom, and for what?**
+It answers one question:
 
-The initial target users are students and young adults who frequently share expenses, lend money, exchange favours, and make informal commitments with friends, classmates, roommates, and teammates.
+> **Who owes me, and for what?**
 
-## 2. Problem Statement
-People regularly have small obligations with people around them: borrowed money, shared expenses, favours, or promises. These are often tracked through memory, chats, screenshots, notes, or informal conversations.
+Klip is deliberately *lender-first*. You record what you gave. The other person is invited to confirm it. Klip is not a generic expense splitter or a two-sided Khatabook clone.
 
-As obligations increase, it becomes difficult to remember:
-- Who owes whom.
-- What the obligation was for.
-- How much is owed.
-- Whether it has been settled.
-- What the current overall balance is.
+## 2. Core Product Decision (v0.2)
 
-Klip provides a centralized and structured way to record and manage these obligations.
+| Decision | Detail |
+|---|---|
+| Only one direction | The entry creator is always the **lender**. There is no "I owe" entry. |
+| Lender invites borrower | The borrower does not need an account to be recorded. When they register with the same phone number, entries addressed to them appear automatically. |
+| Borrower gets value after joining | Once registered, the borrower sees what they have been asked to confirm and can confirm or dispute it. |
+| Phone number is identity | Users log in with their phone number. Counterparties are identified by phone number. |
+| Names are private labels | The lender gives each counterparty a name. That name is visible only to the lender. |
 
-## 3. Product Vision
-Klip aims to be a simple, private, trustworthy way to keep track of informal obligations without becoming a complicated financial-management application.
+**Why:** it keeps the product focused on one clear job (the person who gave wants a reliable record), and the confirm/dispute step keeps it fair and prevents one-sided claims from silently becoming "truth".
+
+**Consequence to accept:** a person who only borrows gets no value until their lender is on Klip. Growth depends on lenders inviting people.
+
+## 3. Problem Statement
+
+People lend small amounts of money and do favours constantly: shared meals, borrowed cash, notes, rides. These are tracked in memory, chats and screenshots. Over time it becomes hard to remember who owes what, why, and whether it was ever settled. Asking for it back is also awkward.
 
 ## 4. Target Users
-### Primary
-Students and young adults who interact with friends, roommates, classmates, project teammates, and club members.
+
+Students and young adults who lend money and do favours for friends, roommates, classmates, project teammates and club members.
 
 ## 5. Goals
-1. Make recording an obligation quick and simple.
-2. Clearly show who owes whom.
-3. Maintain a reliable history.
-4. Allow obligations to be settled.
-5. Protect private user data.
-6. Provide a useful balance dashboard.
+
+1. Recording an entry takes under 15 seconds.
+2. A lender can see exactly who owes them, how much, and why.
+3. The other person can confirm or dispute, so the record is trusted.
+4. Entries can be settled and stay in history.
+5. Private data is protected: only the two people on an entry can see it.
+6. A dashboard shows totals at a glance.
 
 ## 6. Non-Goals for MVP
-The first version will not include:
-- UPI or payment processing
-- Banking integrations
-- Cryptocurrency
-- Lending/credit services
-- Chat or messaging
-- Social feeds
-- AI features
+
+- "I owe" entries (by design, see section 2)
+- Payments, UPI, banking integrations
+- Group expenses or splitting
+- Chat or social features
 - Push notifications
+- Reading the phone's contact list (not reliably possible on web; planned for the mobile app)
+- Photo attachments (table exists, feature is post-MVP)
 - Native mobile apps
-- Complex financial analytics
-- Public profiles
+- OTP phone verification (planned for v1.1, see section 13)
 
 ## 7. Core Concepts
-### Person
-Someone with whom a user tracks obligations.
 
-### Obligation
-A record representing something one person owes another. It can represent money, a favour, or another informal commitment.
+### Entry
+A claim by the lender that someone owes them. Either `money` (amount in paise, INR only) or `favour` (no amount).
 
-### Settlement
-Marking an outstanding obligation as resolved. Settled records remain in history.
+### Counterparty
+The person who owes. Identified by a normalized 10-digit Indian phone number. May or may not be registered.
 
-## 8. MVP Features
-### Authentication
-- Register
-- Login
-- Logout
-- Retrieve authenticated profile
-- Protected routes
-- Secure password hashing
+### Contact
+The lender's private name for a counterparty phone number. Used so the UI shows "Rohan" instead of "8188851176".
 
-### People
-- Add a person
-- View people
-- View person details
-- Remove a person where permitted
+### Status lifecycle
 
-### Obligations
-- Create
-- Edit
-- Delete
-- View
-- Settle
-- Specify who owes whom
-- Add amount when applicable
-- Add description and type
+```text
+pending ──confirm──▶ confirmed ──settle──▶ settled
+   │                     │
+   └────dispute────▶ dispute ──(creator edits)──▶ pending
+```
 
-### Dashboard
-- Total owed to user
-- Total user owes
-- Net balance
-- Pending obligations
-- Recent activity
+| Status | Meaning |
+|---|---|
+| `pending` | Created by the lender, not yet reviewed by the counterparty |
+| `confirmed` | Counterparty agreed |
+| `dispute` | Counterparty disagrees; lender must edit or cancel |
+| `settled` | Paid back or favour returned; kept in history |
 
-### History
-- View historical obligations
-- Filter by status/type
+## 8. Balance Rules
 
-## 9. User Stories
-- As a new user, I want to create an account.
-- As a registered user, I want to log in securely.
-- As a user, I want to add a person.
-- As a user, I want to record an obligation.
-- As a user, I want to specify whether I owe someone or they owe me.
-- As a user, I want to describe why an obligation exists.
-- As a user, I want to settle an obligation.
-- As a user, I want to see my history.
-- As a user, I want my private records protected.
+- **Owed to you** = sum of `amount_paise` on entries you created with status `pending` or `confirmed`. Pending amounts are marked *unconfirmed* in the UI.
+- **You owe** (shown to the counterparty) = sum of entries addressed to you with status `confirmed` only. Pending entries appear as requests to review and do not count until confirmed.
+- `dispute` and `settled` entries are excluded from totals.
+- Favours have no amount. They are shown as a count of open favours.
+- **Net balance** = owed to you minus you owe.
+- Single currency (INR), stored as integer paise.
 
-## 10. Functional Requirements
-- Authentication is required for protected resources.
-- Passwords must never be stored in plaintext.
-- Every protected resource must enforce authorization.
-- Users must never access another user's private records.
-- Obligations have a defined lifecycle.
-- Outstanding balances are calculated from valid pending obligations.
-- Data persists in PostgreSQL.
-- Backend input is validated.
-- API errors are consistent and meaningful.
+## 9. MVP Features and Status
 
-## 11. Non-Functional Requirements
-### Security
-Passwords must be hashed, secrets stored in environment variables, input validated, and authorization enforced.
+| Area | Feature | Status |
+|---|---|---|
+| Auth | Register, login (phone + password), JWT, rate limiting | Done |
+| Entries | Create money/favour entry | Done |
+| Entries | List my entries (as lender or counterparty) | Done |
+| Entries | Auto-link entries when a counterparty registers | Done |
+| Contacts | Private name per counterparty phone | To do |
+| Entries | Counterparty confirm / dispute | To do |
+| Entries | Lender settles an entry | To do |
+| Entries | Lender edits or cancels while pending/disputed | To do |
+| Dashboard | Totals computed by the API | To do |
+| Dashboard | Remove all sample data, use real date | To do |
+| Invite | "Invite on WhatsApp" link with prefilled message | To do |
+| History | Filter by status and type | To do |
+| Quality | Authorization tests (user A cannot read user B's entries) | To do |
+| Deploy | Client on Vercel, API on Render, DB on Neon | Done |
+| Docs | README with live link and screenshots | To do |
 
-### Performance
-The application should remain responsive under expected MVP usage.
+## 10. User Stories
 
-### Reliability
-Related database changes should use transactions where appropriate.
+- As a lender, I record that Rohan owes me ₹500 for dinner in a few taps.
+- As a lender, I give Rohan a name so I do not have to remember his number.
+- As a lender, I invite Rohan to Klip so he can confirm the entry.
+- As a borrower, I register with my number and see what I am asked to confirm.
+- As a borrower, I confirm or dispute an entry.
+- As a lender, I mark an entry settled when I am paid back.
+- As a user, I see my totals and my history.
+- As a user, I know nobody else can read my records.
 
-### Maintainability
-Routes, controllers, services, database access and middleware should have clear responsibilities.
+## 11. Functional Requirements
 
-### Scalability
-The design should allow future features without requiring a complete rewrite.
+- Protected resources require authentication.
+- Passwords are hashed and never returned.
+- Only the creator and the counterparty can read an entry. Everyone else gets 404.
+- Only the counterparty can confirm or dispute. Only the creator can edit, cancel or settle.
+- Every status change writes an append-only event.
+- Money is stored as integer paise.
+- A user cannot create an entry against their own phone number.
+- All input is validated on the server. Errors are consistent JSON.
 
-## 12. Future Possibilities
-- Klip-to-Klip connections
-- Group obligations
-- Recurring obligations
-- Notifications and reminders
-- Favour categories
-- Analytics
-- Mobile app
-- Real-time updates
-- Payment integrations
+## 12. Non-Functional Requirements
 
-## 13. Success Criteria
+- **Security:** hashed passwords, secrets only in environment variables, rate-limited auth, strict CORS allowlist.
+- **Reliability:** multi-step writes use transactions.
+- **Maintainability:** routes, controllers, services and DB access are separate layers.
+- **Performance:** responsive under MVP load. The free Render tier can take ~50 seconds to wake after inactivity; this is accepted for MVP.
+
+## 13. Known Limitations and Risks
+
+| Risk | Impact | Plan |
+|---|---|---|
+| Phone numbers are not verified | Someone can register another person's number and see entries addressed to it | Add OTP verification in v1.1, before real users |
+| Free-tier cold starts | First request can be slow | Acceptable for MVP; mention in README |
+| Borrower-only users get no value | Slower growth | WhatsApp invite link; revisit after real usage |
+| No password reset | Locked-out users | Resolved by OTP in v1.1 |
+
+## 14. Roadmap
+
+- **v1.0 (MVP):** everything in section 9.
+- **v1.1:** OTP verification at registration, password reset via OTP.
+- **v1.2:** reminders, favour categories, partial settlement.
+- **v2:** mobile app (contact picker, push notifications), photo attachments.
+
+## 15. Success Criteria
+
 A user can:
-1. Create an account.
-2. Log in.
-3. Add a person.
-4. Create an obligation.
-5. See the obligation reflected in their balance.
-6. View history.
-7. Settle the obligation.
-8. See the balance update.
-9. Log out.
-10. Return later and find their data persisted.
+1. Register and log in.
+2. Create a money entry and a favour entry for a counterparty with a name.
+3. See them in the list and in correct dashboard totals.
+4. Have the counterparty register, see the entry, and confirm it.
+5. Settle it and see the totals update.
+6. Log out and find the data persisted.
+7. Not be able to see anyone else's entries.
 
-## 14. MVP Completion Definition
-The MVP is complete when all MVP features work, authorization and validation are enforced, the core API is tested, the frontend works against the production API, deployment succeeds, documentation is complete, and no secrets are committed.
+## 16. MVP Completion Definition
+
+All "To do" rows in section 9 are done, authorization tests pass, no secrets are in the repository or its history, and the live deployment works end to end.
+
+## 17. Open Questions
+
+1. Can a settlement be partial?
+2. Can the counterparty also mark "I have paid" for the lender to confirm?
+3. What happens to entries whose counterparty never registers? (expire, remind, archive)
+4. May the lender edit a confirmed entry? Current answer: no, only settle.
